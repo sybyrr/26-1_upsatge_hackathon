@@ -27,7 +27,7 @@ from .solar import SolarClient
 log = logging.getLogger(__name__)
 
 SKIP_CATEGORIES = {"header", "footer", "footnote", "page_number"}
-PASSTHROUGH_CATEGORIES = {"equation"}
+PASSTHROUGH_CATEGORIES = {"equation", "figure", "chart"}
 TABLE_CATEGORIES = {"table"}
 
 TRANSLATE_SYSTEM = (
@@ -108,28 +108,32 @@ def _translate_text(solar: SolarClient, glossary: Glossary, text: str) -> str:
     return glossary.apply(out)
 
 
-_BAD_HEADER_RE = re.compile(
-    r"(?m)^\s*\*{0,2}\s*(?:다음|최종|초안|대안|변경된|개선된|수정된|두\s*번째|또\s*다른)\s*[^\n]{0,40}번역[^\n]{0,30}\*{0,2}\s*[:：].*$"
-)
 _HR_RE = re.compile(r"(?m)^\s*-{3,}\s*$")
+# A markdown bold header like '**번역:**', '**수정 요청 사항:**'. When this appears
+# anywhere in the answer, the model has switched from translating to commentary and
+# everything from that point on is unreliable.
+# Matches headers like '**번역:**', '**수정 요청 사항:**' where the colon lives
+# INSIDE the bold delimiters. Also matches the variant '**번역**:' with colon outside.
+_META_HEADER_RE = re.compile(
+    r"\*\*\s*[^\n*]{1,40}?[:：]\s*\*\*"
+    r"|\*\*\s*[^\n*]{1,40}?\s*\*\*\s*[:：]"
+)
 
 
 def _clean_model_output(out: str) -> str:
-    """Strip the kinds of meta-commentary Solar likes to add despite the system prompt:
-    multi-variant headers ('**최종 번역:**'), horizontal rules, parenthetical translator
-    notes at the very end, leading/trailing fence markers."""
+    """Strip Solar's meta-commentary. Strategy: locate the first markdown section-header
+    of the form '**...:**' and truncate the response there — the prose before it is
+    almost always the actual translation, everything after is rambling."""
     out = out.strip()
     out = re.sub(r"^---\s*", "", out)
     out = re.sub(r"\s*---$", "", out)
-    out = _BAD_HEADER_RE.sub("", out)
     out = _HR_RE.sub("", out)
-    # If the model produced multiple variants separated by blank lines + header markers,
-    # keep only the LAST chunk after the last variant header (usually the most polished).
+    m = _META_HEADER_RE.search(out)
+    if m:
+        out = out[: m.start()].rstrip()
     parts = re.split(r"\n\s*\n", out)
     parts = [p.strip() for p in parts if p.strip()]
     if len(parts) > 1:
-        # If a part looks like translator commentary (starts with "(" and ends with ")"
-        # AND mentions translation), drop it.
         parts = [
             p for p in parts
             if not (p.startswith("(") and p.endswith(")") and ("번역" in p or "translation" in p.lower()))

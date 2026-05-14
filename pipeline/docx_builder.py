@@ -216,9 +216,17 @@ def build_docx(
                 p = doc.add_paragraph()
                 p.add_run("[차트 데이터]\n").bold = True
                 p.add_run(elem.markdown.strip())
-            if tr.translated_text.strip():
-                cap = doc.add_paragraph(tr.translated_text.strip())
-                cap.italic = True
+            # The element's own text on figure/chart is usually the markdown placeholder
+            # '![image](/image/placeholder)...' — NOT a real caption. Real captions arrive
+            # in a separate 'caption' category element. Skip adding it here.
+            continue
+
+        if cat == "caption":
+            text = tr.translated_text.strip() or elem.text.strip()
+            if text:
+                p = doc.add_paragraph()
+                run = p.add_run(text)
+                run.italic = True
             continue
 
         if cat in TABLE_CATEGORIES:
