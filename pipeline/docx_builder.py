@@ -229,6 +229,16 @@ def build_docx(
                 run.italic = True
             continue
 
+        if cat == "header":
+            text = tr.translated_text.strip()
+            if not text:
+                continue
+            p = doc.add_paragraph()
+            run = p.add_run(text)
+            run.italic = True
+            run.font.size = Pt(9)
+            continue
+
         if cat in TABLE_CATEGORIES:
             _add_html_table(doc, tr.translated_html or elem.html)
             continue

@@ -26,9 +26,11 @@ from .solar import SolarClient
 
 log = logging.getLogger(__name__)
 
-SKIP_CATEGORIES = {"header", "footer", "footnote", "page_number"}
+SKIP_CATEGORIES = {"footer", "footnote", "page_number"}
 PASSTHROUGH_CATEGORIES = {"equation", "figure", "chart"}
 TABLE_CATEGORIES = {"table"}
+# 'header' is special: pure-number page headers (e.g. "198") are dropped,
+# but running chapter headers ("4.1 Two Pictures of Linear Equations") are translated.
 
 TRANSLATE_SYSTEM = (
     "You are a precise English→Korean translator for STEM university textbooks.\n\n"
@@ -99,6 +101,66 @@ _LATEX_PATTERNS = [
 ]
 
 
+# Unicode Mathematical Alphanumeric Symbols ranges (U+1D400 - U+1D7FF).
+# Textbook PDFs ship bold/italic letters as these code points; without
+# conversion they pass through as raw glyphs that 맑은 고딕 cannot render,
+# showing up as boxes or fallback chars. Wrap each run in \(...\) so the
+# OMML pipeline picks them up as real math objects.
+
+def _math_style_command(cp: int) -> str | None:
+    if 0x1D400 <= cp <= 0x1D433:                                 # Bold
+        return "mathbf"
+    if 0x1D434 <= cp <= 0x1D467 or cp == 0x210E:                 # Italic
+        return None
+    if 0x1D468 <= cp <= 0x1D49B:                                 # Bold italic
+        return "mathbf"
+    if 0x1D49C <= cp <= 0x1D503:                                 # Script / bold script
+        return "mathcal"
+    if 0x1D504 <= cp <= 0x1D537 or 0x1D56C <= cp <= 0x1D59F:     # Fraktur / bold fraktur
+        return "mathfrak"
+    if 0x1D538 <= cp <= 0x1D56B:                                 # Double-struck
+        return "mathbb"
+    if 0x1D5A0 <= cp <= 0x1D607:                                 # Sans-serif (+ bold)
+        return "mathsf"
+    if 0x1D670 <= cp <= 0x1D6A3:                                 # Monospace
+        return "mathtt"
+    if 0x1D7CE <= cp <= 0x1D7D7 or 0x1D7EC <= cp <= 0x1D7FF:     # Bold digits / sans-bold digits
+        return "mathbf"
+    return None
+
+
+def _wrap_unicode_math(text: str) -> str:
+    if not text:
+        return text
+    import unicodedata as _ud
+
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        cp = ord(text[i])
+        if 0x1D400 <= cp <= 0x1D7FF:
+            j = i + 1
+            while j < n and 0x1D400 <= ord(text[j]) <= 0x1D7FF:
+                j += 1
+            run = text[i:j]
+            normalized = _ud.normalize("NFKC", run)
+            style = _math_style_command(cp)
+            if normalized.isascii() and any(c.isalpha() or c.isdigit() for c in normalized):
+                if style:
+                    out.append(f"\\(\\{style}{{{normalized}}}\\)")
+                else:
+                    out.append(f"\\({normalized}\\)")
+            else:
+                # Greek / other non-ASCII normalization — pass through normalized form.
+                out.append(normalized)
+            i = j
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out)
+
+
 def _protect_latex(text: str) -> tuple[str, list[str]]:
     """Replace LaTeX runs with opaque placeholders so the LLM cannot mangle them."""
     saved: list[str] = []
@@ -129,6 +191,7 @@ def _translate_text(
     text = text.strip()
     if not text:
         return ""
+    text = _wrap_unicode_math(text)
     protected, saved = _protect_latex(text)
     # Hard cap output length proportional to input — prevents the model from
     # writing a multi-paragraph elaboration when the source is a single phrase.
@@ -243,10 +306,22 @@ def _translate_one(
     *,
     prev_text: str = "",
     next_text: str = "",
+    is_duplicate: bool = False,
 ) -> TranslatedElement:
     cat = elem.category.lower()
     if cat in SKIP_CATEGORIES or cat in PASSTHROUGH_CATEGORIES:
         return TranslatedElement(elem, elem.text, elem.html)
+    if cat == "header":
+        # Pure number = page number → drop; otherwise translate the running header.
+        stripped = (elem.text or "").strip()
+        if not stripped or stripped.replace(".", "").isdigit():
+            return TranslatedElement(elem, "", elem.html)
+        try:
+            translated = _translate_text(solar, glossary, stripped)
+        except Exception:
+            log.exception("header translate failed; keeping original")
+            translated = stripped
+        return TranslatedElement(elem, translated, elem.html)
     if cat in TABLE_CATEGORIES:
         try:
             new_html = _translate_table_html(solar, glossary, elem.html)
@@ -263,6 +338,9 @@ def _translate_one(
         log.info("translator: skipping OCR-garbage element id=%s page=%s text=%r",
                  elem.id, elem.page, src[:60])
         return TranslatedElement(elem, "", elem.html)
+    if is_duplicate:
+        log.info("translator: skipping duplicate element id=%s page=%s", elem.id, elem.page)
+        return TranslatedElement(elem, "", elem.html)
 
     try:
         translated = _translate_text(
@@ -273,6 +351,33 @@ def _translate_one(
         log.exception("text translate failed; keeping original")
         translated = elem.text
     return TranslatedElement(elem, translated, elem.html)
+
+
+def _detect_near_duplicates(items: list[Element]) -> set[int]:
+    """Return set of element ids that are near-duplicates of an earlier element.
+
+    Document Parse occasionally returns the same paragraph twice (once as text,
+    once as part of a different region) — emit only the first occurrence.
+    Uses normalized 12-token shingles to compare.
+    """
+    seen: dict[str, int] = {}
+    dupes: set[int] = set()
+    for elem in items:
+        cat = elem.category.lower()
+        if cat not in CONTEXT_USABLE:
+            continue
+        text = (elem.text or "").strip()
+        if len(text) < 30:
+            continue
+        # Normalize: lowercase, strip non-alnum
+        norm = re.sub(r"\W+", " ", text.lower()).strip()
+        # Use the leading 80 chars as fingerprint
+        fp = norm[:80]
+        if fp in seen:
+            dupes.add(elem.id)
+        else:
+            seen[fp] = elem.id
+    return dupes
 
 
 def _build_neighbor_index(items: list[Element]) -> tuple[list[str], list[str]]:
@@ -311,6 +416,9 @@ def translate_elements(
     except ValueError:
         workers = 5
 
+    dupes = _detect_near_duplicates(items)
+    if dupes:
+        log.info("translator: %d near-duplicate elements will be dropped", len(dupes))
     prevs, nexts = _build_neighbor_index(items)
 
     if on_progress:
@@ -319,7 +427,11 @@ def translate_elements(
     if workers == 1 or total <= 1:
         out: list[TranslatedElement] = []
         for i, e in enumerate(items, 1):
-            out.append(_translate_one(solar, glossary, e, prev_text=prevs[i-1], next_text=nexts[i-1]))
+            out.append(_translate_one(
+                solar, glossary, e,
+                prev_text=prevs[i-1], next_text=nexts[i-1],
+                is_duplicate=(e.id in dupes),
+            ))
             if on_progress:
                 on_progress(i, total)
         return out
@@ -332,6 +444,7 @@ def translate_elements(
             ex.submit(
                 _translate_one, solar, glossary, elem,
                 prev_text=prevs[idx], next_text=nexts[idx],
+                is_duplicate=(elem.id in dupes),
             ): idx
             for idx, elem in enumerate(items)
         }
