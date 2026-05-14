@@ -10,7 +10,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Iterable
 
@@ -94,33 +96,59 @@ def _translate_table_html(solar: SolarClient, glossary: Glossary, html: str) -> 
     return str(soup)
 
 
+def _translate_one(
+    solar: SolarClient, glossary: Glossary, elem: Element
+) -> TranslatedElement:
+    cat = elem.category.lower()
+    if cat in SKIP_CATEGORIES or cat in PASSTHROUGH_CATEGORIES:
+        return TranslatedElement(elem, elem.text, elem.html)
+    if cat in TABLE_CATEGORIES:
+        try:
+            new_html = _translate_table_html(solar, glossary, elem.html)
+        except Exception:
+            log.exception("table translate failed; keeping original")
+            new_html = elem.html
+        return TranslatedElement(elem, elem.text, new_html)
+    try:
+        translated = _translate_text(solar, glossary, elem.text or elem.markdown)
+    except Exception:
+        log.exception("text translate failed; keeping original")
+        translated = elem.text
+    return TranslatedElement(elem, translated, elem.html)
+
+
 def translate_elements(
     solar: SolarClient,
     glossary: Glossary,
     elements: Iterable[Element],
 ) -> list[TranslatedElement]:
-    results: list[TranslatedElement] = []
-    for elem in elements:
-        cat = elem.category.lower()
-        if cat in SKIP_CATEGORIES:
-            results.append(TranslatedElement(elem, elem.text, elem.html))
-            continue
-        if cat in PASSTHROUGH_CATEGORIES:
-            results.append(TranslatedElement(elem, elem.text, elem.html))
-            continue
-        if cat in TABLE_CATEGORIES:
-            try:
-                new_html = _translate_table_html(solar, glossary, elem.html)
-            except Exception:
-                log.exception("table translate failed; keeping original")
-                new_html = elem.html
-            results.append(TranslatedElement(elem, elem.text, new_html))
-            continue
+    items = list(elements)
+    try:
+        workers = max(1, int(os.environ.get("TRANSLATE_WORKERS", "5")))
+    except ValueError:
+        workers = 5
 
-        try:
-            translated = _translate_text(solar, glossary, elem.text or elem.markdown)
-        except Exception:
-            log.exception("text translate failed; keeping original")
-            translated = elem.text
-        results.append(TranslatedElement(elem, translated, elem.html))
-    return results
+    if workers == 1 or len(items) <= 1:
+        return [_translate_one(solar, glossary, e) for e in items]
+
+    results: list[TranslatedElement | None] = [None] * len(items)
+    log_every = max(1, len(items) // 20)  # ~5% increments
+    completed = 0
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = {
+            ex.submit(_translate_one, solar, glossary, elem): idx
+            for idx, elem in enumerate(items)
+        }
+        for fut in as_completed(futures):
+            idx = futures[fut]
+            try:
+                results[idx] = fut.result()
+            except Exception:
+                log.exception("worker failed for element %d; keeping original", idx)
+                e = items[idx]
+                results[idx] = TranslatedElement(e, e.text, e.html)
+            completed += 1
+            if completed % log_every == 0 or completed == len(items):
+                log.info("translated %d/%d elements (workers=%d)", completed, len(items), workers)
+
+    return [r for r in results if r is not None]
