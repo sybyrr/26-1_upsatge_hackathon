@@ -61,12 +61,27 @@ class TranslatedElement:
     translated_html: str
 
 
-def _user_prompt(glossary: Glossary, payload: str) -> list[dict[str, str]]:
+def _user_prompt(
+    glossary: Glossary,
+    payload: str,
+    *,
+    prev_context: str = "",
+    next_context: str = "",
+) -> list[dict[str, str]]:
     glossary_block = glossary.as_prompt_block()
     parts = []
     if glossary_block:
         parts.append(glossary_block)
-    parts.append("Translate the following to Korean. Output translation only.")
+    if prev_context or next_context:
+        parts.append(
+            "CONTEXT (surrounding text from the same document — for reference ONLY, "
+            "DO NOT translate or include any of this in your output):"
+        )
+        if prev_context:
+            parts.append(f"[Previous text]\n{prev_context}")
+        if next_context:
+            parts.append(f"[Next text]\n{next_context}")
+    parts.append("TRANSLATE ONLY THE TEXT BETWEEN THE FENCES BELOW. Output translation only.")
     parts.append("---")
     parts.append(payload)
     parts.append("---")
@@ -103,7 +118,14 @@ def _restore_latex(text: str, saved: list[str]) -> str:
     return text
 
 
-def _translate_text(solar: SolarClient, glossary: Glossary, text: str) -> str:
+def _translate_text(
+    solar: SolarClient,
+    glossary: Glossary,
+    text: str,
+    *,
+    prev_context: str = "",
+    next_context: str = "",
+) -> str:
     text = text.strip()
     if not text:
         return ""
@@ -113,7 +135,11 @@ def _translate_text(solar: SolarClient, glossary: Glossary, text: str) -> str:
     # Korean is ~1 token/char so this gives a generous ~3x buffer.
     max_tokens = max(120, len(protected) * 3)
     out = solar.chat(
-        messages=_user_prompt(glossary, protected),
+        messages=_user_prompt(
+            glossary, protected,
+            prev_context=prev_context.strip()[:600],
+            next_context=next_context.strip()[:600],
+        ),
         temperature=0.0,
         max_tokens=max_tokens,
     )
@@ -185,8 +211,16 @@ def _translate_table_html(solar: SolarClient, glossary: Glossary, html: str) -> 
     return str(soup)
 
 
+CONTEXT_USABLE = {"paragraph", "heading1", "heading2", "heading3", "title", "list", "caption"}
+
+
 def _translate_one(
-    solar: SolarClient, glossary: Glossary, elem: Element
+    solar: SolarClient,
+    glossary: Glossary,
+    elem: Element,
+    *,
+    prev_text: str = "",
+    next_text: str = "",
 ) -> TranslatedElement:
     cat = elem.category.lower()
     if cat in SKIP_CATEGORIES or cat in PASSTHROUGH_CATEGORIES:
@@ -199,11 +233,36 @@ def _translate_one(
             new_html = elem.html
         return TranslatedElement(elem, elem.text, new_html)
     try:
-        translated = _translate_text(solar, glossary, elem.text or elem.markdown)
+        translated = _translate_text(
+            solar, glossary, elem.text or elem.markdown,
+            prev_context=prev_text, next_context=next_text,
+        )
     except Exception:
         log.exception("text translate failed; keeping original")
         translated = elem.text
     return TranslatedElement(elem, translated, elem.html)
+
+
+def _build_neighbor_index(items: list[Element]) -> tuple[list[str], list[str]]:
+    """For each element, find the nearest preceding and following element whose
+    category is in CONTEXT_USABLE, and return their text. Headers/footers/figures
+    are skipped — they're not useful as translation context."""
+    prevs: list[str] = []
+    nexts: list[str] = []
+    for i in range(len(items)):
+        prev_text = ""
+        for j in range(i - 1, max(-1, i - 6), -1):
+            if items[j].category.lower() in CONTEXT_USABLE and items[j].text.strip():
+                prev_text = items[j].text.strip()
+                break
+        next_text = ""
+        for j in range(i + 1, min(len(items), i + 6)):
+            if items[j].category.lower() in CONTEXT_USABLE and items[j].text.strip():
+                next_text = items[j].text.strip()
+                break
+        prevs.append(prev_text)
+        nexts.append(next_text)
+    return prevs, nexts
 
 
 def translate_elements(
@@ -220,13 +279,15 @@ def translate_elements(
     except ValueError:
         workers = 5
 
+    prevs, nexts = _build_neighbor_index(items)
+
     if on_progress:
         on_progress(0, total)
 
     if workers == 1 or total <= 1:
         out: list[TranslatedElement] = []
         for i, e in enumerate(items, 1):
-            out.append(_translate_one(solar, glossary, e))
+            out.append(_translate_one(solar, glossary, e, prev_text=prevs[i-1], next_text=nexts[i-1]))
             if on_progress:
                 on_progress(i, total)
         return out
@@ -236,7 +297,10 @@ def translate_elements(
     completed = 0
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = {
-            ex.submit(_translate_one, solar, glossary, elem): idx
+            ex.submit(
+                _translate_one, solar, glossary, elem,
+                prev_text=prevs[idx], next_text=nexts[idx],
+            ): idx
             for idx, elem in enumerate(items)
         }
         for fut in as_completed(futures):

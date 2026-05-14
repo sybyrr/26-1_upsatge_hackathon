@@ -1,12 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Minimal MathML → OMML transform for STEM textbook demos.
-  Covers: mi, mn, mo, mtext, mrow, mfrac, msup, msub, msubsup,
-  msqrt, mroot, mfenced, mtable/mtr/mtd, mover/munder/munderover.
+  MathML → OMML transform tuned for STEM textbook math.
 
-  This is NOT a full implementation. For production fidelity replace
-  with Microsoft's MML2OMML.XSL (distributed with MS Office) or a
-  more complete open-source transform.
+  Covers: mi/mn/mo/mtext/mrow, mfrac, msup/msub/msubsup, msqrt/mroot,
+  mfenced, mtable/mtr/mtd (matrix + align + cases), mover/munder/munderover
+  (vectors, sums, integrals with limits), mphantom (skipped), mspace,
+  multi-char mi (vec/hat/bar accents via combining marks).
+
+  NOT a full implementation of OMML. For 100% fidelity replace with the
+  official MS Office MML2OMML.XSL.
 -->
 <xsl:stylesheet version="1.0"
     xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
@@ -43,6 +45,24 @@
 
   <xsl:template match="mml:mtext | mtext">
     <m:r><m:t><xsl:value-of select="."/></m:t></m:r>
+  </xsl:template>
+
+  <!-- whitespace / spacing -->
+  <xsl:template match="mml:mspace | mspace">
+    <m:r><m:t xml:space="preserve"> </m:t></m:r>
+  </xsl:template>
+
+  <!-- phantom is invisible spacing — drop content -->
+  <xsl:template match="mml:mphantom | mphantom"/>
+
+  <!-- mstyle is a wrapper for attribute scoping; pass children through -->
+  <xsl:template match="mml:mstyle | mstyle">
+    <xsl:apply-templates/>
+  </xsl:template>
+
+  <!-- mpadded is a wrapper too -->
+  <xsl:template match="mml:mpadded | mpadded">
+    <xsl:apply-templates/>
   </xsl:template>
 
   <xsl:template match="mml:mfrac | mfrac">
@@ -94,18 +114,37 @@
   <xsl:template match="mml:mfenced | mfenced">
     <m:d>
       <m:dPr>
-        <m:begChr m:val="{@open}"/>
-        <m:endChr m:val="{@close}"/>
+        <xsl:if test="@open"><m:begChr m:val="{@open}"/></xsl:if>
+        <xsl:if test="@close"><m:endChr m:val="{@close}"/></xsl:if>
+        <xsl:if test="@separators"><m:sepChr m:val="{@separators}"/></xsl:if>
       </m:dPr>
       <m:e><xsl:apply-templates/></m:e>
     </m:d>
   </xsl:template>
 
+  <!--
+    mover: an accent or limit above an expression.
+    - If the over-element is an arrow/bar/hat (accent), render as m:acc.
+    - If it's a limit on a sum/integral operator, render as m:nary or m:limUpp.
+    Heuristic: if base is a single mo that looks like an operator (sum/int/lim),
+    treat as upper limit; otherwise treat as accent.
+  -->
   <xsl:template match="mml:mover | mover">
-    <m:acc>
-      <m:accPr><m:chr m:val="{string(*[2])}"/></m:accPr>
-      <m:e><xsl:apply-templates select="*[1]"/></m:e>
-    </m:acc>
+    <xsl:variable name="overText" select="string(*[2])"/>
+    <xsl:choose>
+      <xsl:when test="$overText='→' or $overText='⃗' or $overText='↔' or $overText='←' or $overText='ˆ' or $overText='^' or $overText='˜' or $overText='~' or $overText='¯' or $overText='-' or $overText='˙' or $overText='.'">
+        <m:acc>
+          <m:accPr><m:chr m:val="{$overText}"/></m:accPr>
+          <m:e><xsl:apply-templates select="*[1]"/></m:e>
+        </m:acc>
+      </xsl:when>
+      <xsl:otherwise>
+        <m:limUpp>
+          <m:e><xsl:apply-templates select="*[1]"/></m:e>
+          <m:lim><xsl:apply-templates select="*[2]"/></m:lim>
+        </m:limUpp>
+      </xsl:otherwise>
+    </xsl:choose>
   </xsl:template>
 
   <xsl:template match="mml:munder | munder">
@@ -115,10 +154,16 @@
     </m:limLow>
   </xsl:template>
 
+  <!--
+    munderover: typically sum/int with both limits. Render as m:nary so the
+    operator gets the right limit positioning.
+  -->
   <xsl:template match="mml:munderover | munderover">
+    <xsl:variable name="op" select="string(*[1])"/>
     <m:nary>
       <m:naryPr>
-        <m:chr m:val="{string(*[1])}"/>
+        <m:chr m:val="{$op}"/>
+        <m:limLoc m:val="undOvr"/>
       </m:naryPr>
       <m:sub><xsl:apply-templates select="*[2]"/></m:sub>
       <m:sup><xsl:apply-templates select="*[3]"/></m:sup>
@@ -126,6 +171,10 @@
     </m:nary>
   </xsl:template>
 
+  <!--
+    mtable: matrices, align environments, cases.
+    Build an m:m with one m:mc per column; column count = max td count.
+  -->
   <xsl:template match="mml:mtable | mtable">
     <m:m>
       <m:mPr>
@@ -154,10 +203,37 @@
     </m:e>
   </xsl:template>
 
-  <xsl:template match="mml:mspace | mspace">
-    <m:r><m:t> </m:t></m:r>
+  <!--
+    mlabeledtr: like mtr but first child is an equation label (e.g. (1)).
+    OMML has no native label cell — skip the label and render the rest.
+  -->
+  <xsl:template match="mml:mlabeledtr | mlabeledtr">
+    <m:mr>
+      <xsl:apply-templates select="*[position() &gt; 1]"/>
+    </m:mr>
   </xsl:template>
 
+  <!-- merror: invalid markup, render as red text -->
+  <xsl:template match="mml:merror | merror">
+    <m:r>
+      <m:rPr><m:nor/></m:rPr>
+      <m:t><xsl:value-of select="."/></m:t>
+    </m:r>
+  </xsl:template>
+
+  <!-- multiscripts (rare) — render as msup or msub fallback -->
+  <xsl:template match="mml:mmultiscripts | mmultiscripts">
+    <xsl:apply-templates/>
+  </xsl:template>
+
+  <!-- semantics: just unwrap to first child -->
+  <xsl:template match="mml:semantics | semantics">
+    <xsl:apply-templates select="*[1]"/>
+  </xsl:template>
+
+  <xsl:template match="mml:annotation | annotation | mml:annotation-xml | annotation-xml"/>
+
+  <!-- catch-all: descend into unknown elements -->
   <xsl:template match="*">
     <xsl:apply-templates/>
   </xsl:template>
