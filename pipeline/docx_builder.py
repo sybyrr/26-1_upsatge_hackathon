@@ -37,6 +37,8 @@ def _add_image_from_base64(doc: Document, b64: str, max_width_inches: float = 5.
     data = b64.strip()
     if data.startswith("data:") and "," in data:
         data = data.split(",", 1)[1]
+    # Some encoders include whitespace inside the base64 — strip it.
+    data = "".join(data.split())
     try:
         raw = base64.b64decode(data, validate=False)
     except Exception as e:
@@ -45,13 +47,32 @@ def _add_image_from_base64(doc: Document, b64: str, max_width_inches: float = 5.
     if len(raw) < 64:
         log.warning("image: decoded bytes too small (%d) — likely placeholder, skipping", len(raw))
         return False
-    bio = BytesIO(raw)
+
+    # Verify with PIL first — if PIL can read it, normalize to PNG and re-encode so we
+    # bypass any python-docx quirks with the original format (progressive JPEG, CMYK, etc).
+    try:
+        from PIL import Image
+        with Image.open(BytesIO(raw)) as im:
+            im.load()
+            w, h = im.size
+            mode = im.mode
+            if mode not in ("RGB", "RGBA", "L"):
+                im = im.convert("RGB")
+            normalized = BytesIO()
+            im.save(normalized, format="PNG")
+            normalized.seek(0)
+        log.info("image: PIL ok mode=%s size=%dx%d, normalized to PNG", mode, w, h)
+        bio = normalized
+    except Exception as e:
+        log.warning("image: PIL could not open (%s); first 8 bytes hex=%s, total bytes=%d", e, raw[:8].hex(), len(raw))
+        return False
+
     try:
         doc.add_picture(bio, width=Inches(max_width_inches))
-        log.info("image: inserted (%d bytes)", len(raw))
+        log.info("image: inserted")
         return True
     except Exception as e:
-        log.warning("image: add_picture failed (%s); first 8 bytes hex=%s", e, raw[:8].hex())
+        log.warning("image: add_picture failed (%s)", e)
         return False
 
 
