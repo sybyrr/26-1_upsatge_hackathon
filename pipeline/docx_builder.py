@@ -9,9 +9,13 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup
 from docx import Document
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 from docx.shared import Inches, Pt
 
 from .translator import TranslatedElement
+
+KOREAN_FONT = "맑은 고딕"
 
 log = logging.getLogger(__name__)
 
@@ -85,6 +89,35 @@ def _add_equation_paragraph(doc: Document, text: str) -> None:
     run.italic = True
 
 
+def _apply_korean_font_to_style(style, font_name: str) -> None:
+    """Set ascii/hAnsi/eastAsia/cs fonts on a style so Korean text renders properly."""
+    rpr = style.element.get_or_add_rPr()
+    rfonts = rpr.find(qn("w:rFonts"))
+    if rfonts is None:
+        rfonts = OxmlElement("w:rFonts")
+        rpr.append(rfonts)
+    for attr in ("ascii", "hAnsi", "eastAsia", "cs"):
+        rfonts.set(qn(f"w:{attr}"), font_name)
+
+
+def _configure_korean_fonts(doc: Document, font_name: str = KOREAN_FONT) -> None:
+    """Apply the Korean font to Normal + Heading styles so the whole document inherits it."""
+    style_names = ["Normal", "Title"] + [f"Heading {i}" for i in range(1, 10)] + [
+        "List Bullet",
+        "List Number",
+        "Caption",
+    ]
+    for name in style_names:
+        try:
+            style = doc.styles[name]
+        except KeyError:
+            continue
+        try:
+            _apply_korean_font_to_style(style, font_name)
+        except Exception:
+            log.warning("could not set Korean font on style %s", name)
+
+
 def build_docx(
     translated: list[TranslatedElement],
     output_path: str | Path,
@@ -92,6 +125,7 @@ def build_docx(
     title: str | None = None,
 ) -> Path:
     doc = Document()
+    _configure_korean_fonts(doc)
     if title:
         doc.add_heading(title, level=0)
 
