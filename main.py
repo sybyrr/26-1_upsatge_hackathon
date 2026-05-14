@@ -74,11 +74,15 @@ def _run_pipeline(job_id: str, work_path: Path, want_pdf: bool, title: str | Non
             import json
             from collections import Counter
 
-            def _truncate(v):  # type: ignore[no-untyped-def]
+            BASE64_KEYS = {"base64_encoding", "base64", "base64Image", "image_base64"}
+
+            def _truncate(v, *, key: str | None = None):  # type: ignore[no-untyped-def]
                 if isinstance(v, str):
+                    if key in BASE64_KEYS:
+                        return v  # keep full so image debugging can replay locally
                     return v if len(v) <= 400 else v[:400] + f"…(+{len(v)-400} chars)"
                 if isinstance(v, dict):
-                    return {k: _truncate(x) for k, x in v.items()}
+                    return {k: _truncate(x, key=k) for k, x in v.items()}
                 if isinstance(v, list):
                     return [_truncate(x) for x in v[:10]] + ([f"…(+{len(v)-10})"] if len(v) > 10 else [])
                 return v

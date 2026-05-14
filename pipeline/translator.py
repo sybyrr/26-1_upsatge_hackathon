@@ -31,13 +31,20 @@ PASSTHROUGH_CATEGORIES = {"equation"}
 TABLE_CATEGORIES = {"table"}
 
 TRANSLATE_SYSTEM = (
-    "You are a precise English→Korean translator for STEM university textbooks. "
-    "Translate the user's text into natural, academic Korean. "
-    "Rules:\n"
-    "1. Preserve any LaTeX delimited by $...$, $$...$$, \\(...\\), or \\[...\\] EXACTLY.\n"
-    "2. Preserve inline code, identifiers, numbers, units, and equation references verbatim.\n"
-    "3. Do NOT add commentary, prefacing, or explanations — output ONLY the translation.\n"
-    "4. Honor the supplied terminology mapping strictly.\n"
+    "You are a precise English→Korean translator for STEM university textbooks.\n\n"
+    "ABSOLUTE RULES — violating any of these makes the output unusable:\n"
+    "1. Output EXACTLY ONE translation. NEVER multiple drafts, variants, alternatives, "
+    "or 'final versions'. Pick the single best Korean rendering and stop.\n"
+    "2. NO commentary, NO meta-explanations, NO translator notes, NO markdown headings "
+    "like '**최종 번역:**' or '**다음 번역:**'. Output the translation as plain prose only.\n"
+    "3. NO horizontal rules ('---'), NO bullet lists explaining choices, NO parenthetical "
+    "asides discussing terminology decisions. Just the translation.\n"
+    "4. Preserve any LaTeX (\\$...\\$, \\$\\$...\\$\\$, \\\\(...\\\\), \\\\[...\\\\]) and placeholders "
+    "like ⟦M0⟧ EXACTLY — byte for byte.\n"
+    "5. Preserve inline code, identifiers, numbers, units, and equation references verbatim.\n"
+    "6. Honor the supplied terminology mapping strictly.\n\n"
+    "If the input is short, the output should be short too. If the input is one sentence, "
+    "the output is one sentence."
 )
 
 
@@ -95,12 +102,40 @@ def _translate_text(solar: SolarClient, glossary: Glossary, text: str) -> str:
     if not text:
         return ""
     protected, saved = _protect_latex(text)
-    out = solar.chat(messages=_user_prompt(glossary, protected), temperature=0.2)
+    out = solar.chat(messages=_user_prompt(glossary, protected), temperature=0.0)
+    out = _clean_model_output(out)
+    out = _restore_latex(out, saved)
+    return glossary.apply(out)
+
+
+_BAD_HEADER_RE = re.compile(
+    r"(?m)^\s*\*{0,2}\s*(?:다음|최종|초안|대안|변경된|개선된|수정된|두\s*번째|또\s*다른)\s*[^\n]{0,40}번역[^\n]{0,30}\*{0,2}\s*[:：].*$"
+)
+_HR_RE = re.compile(r"(?m)^\s*-{3,}\s*$")
+
+
+def _clean_model_output(out: str) -> str:
+    """Strip the kinds of meta-commentary Solar likes to add despite the system prompt:
+    multi-variant headers ('**최종 번역:**'), horizontal rules, parenthetical translator
+    notes at the very end, leading/trailing fence markers."""
     out = out.strip()
     out = re.sub(r"^---\s*", "", out)
     out = re.sub(r"\s*---$", "", out)
-    out = _restore_latex(out, saved)
-    return glossary.apply(out)
+    out = _BAD_HEADER_RE.sub("", out)
+    out = _HR_RE.sub("", out)
+    # If the model produced multiple variants separated by blank lines + header markers,
+    # keep only the LAST chunk after the last variant header (usually the most polished).
+    parts = re.split(r"\n\s*\n", out)
+    parts = [p.strip() for p in parts if p.strip()]
+    if len(parts) > 1:
+        # If a part looks like translator commentary (starts with "(" and ends with ")"
+        # AND mentions translation), drop it.
+        parts = [
+            p for p in parts
+            if not (p.startswith("(") and p.endswith(")") and ("번역" in p or "translation" in p.lower()))
+        ]
+        out = "\n\n".join(parts) if parts else out
+    return out.strip()
 
 
 def _translate_table_html(solar: SolarClient, glossary: Glossary, html: str) -> str:
