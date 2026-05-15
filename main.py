@@ -249,7 +249,12 @@ def _run_pipeline(
 
         REGISTRY.set_stage(job_id, "docx", message="Word 문서 조립 중")
         out_docx = OUTPUT_DIR / f"{job_id}_translated.docx"
-        docx_builder.build_docx(translated, out_docx, title=title or work_path.stem)
+        docx_builder.build_docx(
+            translated,
+            out_docx,
+            title=title or work_path.stem,
+            source_pdf=work_path if work_path.suffix.lower() == ".pdf" and not mock_mode else None,
+        )
         log.info("job %s :: wrote %s", job_id, out_docx)
 
         out_pdf = None

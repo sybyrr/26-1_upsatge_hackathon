@@ -16,12 +16,9 @@ from docx.shared import Inches, Pt
 
 from .translator import TranslatedElement
 
-# Fonts are env-tunable so the output can be matched to whatever the source
-# textbook used. Defaults pick a Korean font that ships with Windows.
-#   DOCX_KOREAN_FONT  — applied to East-Asian runs (ascii/hAnsi/eastAsia/cs).
-#   DOCX_LATIN_FONT   — optional override for Latin runs only; if empty the
-#                       Korean font handles both (works fine for 맑은 고딕).
-#   DOCX_FONT_SIZE    — body font size in points (Word default is 11).
+# Fonts and page styling are env-tunable so the output can be matched to
+# whatever the source textbook used. Defaults pick a Korean font that
+# ships with Windows. All settings: see _env_*() helpers below.
 KOREAN_FONT = os.environ.get("DOCX_KOREAN_FONT", "맑은 고딕")
 LATIN_FONT = os.environ.get("DOCX_LATIN_FONT", "").strip() or None
 try:
@@ -30,6 +27,33 @@ except ValueError:
     BODY_FONT_SIZE = 11.0
 
 log = logging.getLogger(__name__)
+
+
+def _env_float(name: str) -> float | None:
+    """Optional float env var. Empty string or missing = None."""
+    v = os.environ.get(name, "").strip()
+    if not v:
+        return None
+    try:
+        return float(v)
+    except ValueError:
+        log.warning("env %s=%r is not a number; ignoring", name, v)
+        return None
+
+
+def _env_hex_color(name: str) -> str | None:
+    """Optional 6-digit hex color env var. Accepts '#RRGGBB' or 'RRGGBB'.
+
+    Returns the uppercase 6-char hex without the '#', or None if missing /
+    malformed.
+    """
+    v = os.environ.get(name, "").strip().lstrip("#")
+    if not v:
+        return None
+    if len(v) != 6 or not all(c in "0123456789abcdefABCDEF" for c in v):
+        log.warning("env %s=%r is not a 6-digit hex color; ignoring", name, v)
+        return None
+    return v.upper()
 
 HEADING_LEVELS = {
     "heading1": 1,
@@ -187,6 +211,95 @@ def _add_text_with_inline_math(doc: Document, text: str, *, style: str | None = 
             p.add_run(part)
 
 
+def _apply_page_layout(doc: Document, layout) -> None:
+    """Apply page size + margins to all sections.
+
+    layout: PageLayout instance (from pipeline.page_layout) or None. Env
+    vars DOCX_PAGE_WIDTH_IN, DOCX_PAGE_HEIGHT_IN, DOCX_MARGIN_*_IN can
+    override individual fields. Anything missing falls back to layout
+    (when provided) or Word defaults.
+    """
+    width_in = _env_float("DOCX_PAGE_WIDTH_IN")
+    height_in = _env_float("DOCX_PAGE_HEIGHT_IN")
+    margin_l = _env_float("DOCX_MARGIN_LEFT_IN")
+    margin_r = _env_float("DOCX_MARGIN_RIGHT_IN")
+    margin_t = _env_float("DOCX_MARGIN_TOP_IN")
+    margin_b = _env_float("DOCX_MARGIN_BOTTOM_IN")
+
+    if layout is not None:
+        width_in = width_in or layout.width_in
+        height_in = height_in or layout.height_in
+        margin_l = margin_l or layout.margin_left_in
+        margin_r = margin_r or layout.margin_right_in
+        margin_t = margin_t or layout.margin_top_in
+        margin_b = margin_b or layout.margin_bottom_in
+
+    for section in doc.sections:
+        if width_in:
+            section.page_width = Inches(width_in)
+        if height_in:
+            section.page_height = Inches(height_in)
+        if margin_l:
+            section.left_margin = Inches(margin_l)
+        if margin_r:
+            section.right_margin = Inches(margin_r)
+        if margin_t:
+            section.top_margin = Inches(margin_t)
+        if margin_b:
+            section.bottom_margin = Inches(margin_b)
+
+    if any([width_in, height_in, margin_l, margin_r, margin_t, margin_b]):
+        log.info(
+            "page layout applied: %sx%s in, margins L=%s R=%s T=%s B=%s",
+            width_in, height_in, margin_l, margin_r, margin_t, margin_b,
+        )
+
+
+def _apply_page_background(doc: Document, hex_color: str) -> None:
+    """Insert <w:background w:color='RRGGBB'> at the document root.
+
+    Word also requires displayBackgroundShape in settings.xml for the
+    color to render in Print Layout view. python-docx exposes settings
+    via doc.settings.element.
+    """
+    body = doc.element  # w:document
+    bg = OxmlElement("w:background")
+    bg.set(qn("w:color"), hex_color)
+    # Background must come *before* w:body inside w:document.
+    body.insert(0, bg)
+
+    settings_el = doc.settings.element
+    if settings_el.find(qn("w:displayBackgroundShape")) is None:
+        settings_el.append(OxmlElement("w:displayBackgroundShape"))
+
+
+def _apply_body_color(style, hex_color: str) -> None:
+    """Set the run color for a style."""
+    rpr = style.element.get_or_add_rPr()
+    color = rpr.find(qn("w:color"))
+    if color is None:
+        color = OxmlElement("w:color")
+        rpr.append(color)
+    color.set(qn("w:val"), hex_color)
+
+
+def _apply_paragraph_format(
+    style,
+    *,
+    line_spacing: float | None,
+    space_after_pt: float | None,
+    first_line_indent_in: float | None,
+) -> None:
+    """Apply paragraph-format knobs (line spacing, space-after, first-line indent)."""
+    pf = style.paragraph_format
+    if line_spacing is not None:
+        pf.line_spacing = line_spacing
+    if space_after_pt is not None:
+        pf.space_after = Pt(space_after_pt)
+    if first_line_indent_in is not None:
+        pf.first_line_indent = Inches(first_line_indent_in)
+
+
 def _apply_korean_font_to_style(
     style,
     korean_font: str,
@@ -231,12 +344,26 @@ def _configure_korean_fonts(
     *,
     body_size_pt: float = BODY_FONT_SIZE,
 ) -> None:
-    """Apply fonts/size to Normal + Heading + List + Caption styles so the
-    whole document inherits them. Headings get a 1.0 multiplier — Word's
-    own heading style sizing relative to the base is left intact, we just
-    override the font face."""
+    """Apply fonts/size + paragraph format + body color to Normal +
+    Heading + List + Caption styles so the whole document inherits them.
+
+    Tuning env vars (all optional):
+      DOCX_LINE_SPACING                 e.g. 1.15
+      DOCX_PARAGRAPH_SPACING_AFTER_PT   e.g. 6
+      DOCX_FIRST_LINE_INDENT_IN         e.g. 0.25
+      DOCX_BODY_COLOR                   e.g. 222222
+
+    Headings keep Word's relative sizing/format — we only override the
+    font face and (optionally) body color.
+    """
     body_styles = ["Normal", "List Bullet", "List Number", "Caption"]
     heading_styles = ["Title"] + [f"Heading {i}" for i in range(1, 10)]
+
+    line_spacing = _env_float("DOCX_LINE_SPACING")
+    space_after_pt = _env_float("DOCX_PARAGRAPH_SPACING_AFTER_PT")
+    first_line_indent_in = _env_float("DOCX_FIRST_LINE_INDENT_IN")
+    body_color = _env_hex_color("DOCX_BODY_COLOR")
+
     for name in body_styles:
         try:
             style = doc.styles[name]
@@ -244,18 +371,27 @@ def _configure_korean_fonts(
             continue
         try:
             _apply_korean_font_to_style(style, korean_font, latin_font, size_pt=body_size_pt)
+            _apply_paragraph_format(
+                style,
+                line_spacing=line_spacing,
+                space_after_pt=space_after_pt,
+                first_line_indent_in=first_line_indent_in if name == "Normal" else None,
+            )
+            if body_color:
+                _apply_body_color(style, body_color)
         except Exception:
-            log.warning("could not set fonts on style %s", name)
+            log.warning("could not set body styling on style %s", name)
     for name in heading_styles:
         try:
             style = doc.styles[name]
         except KeyError:
             continue
         try:
-            # Don't override heading size — Word's defaults are intentional.
             _apply_korean_font_to_style(style, korean_font, latin_font)
+            if body_color:
+                _apply_body_color(style, body_color)
         except Exception:
-            log.warning("could not set fonts on style %s", name)
+            log.warning("could not set heading styling on style %s", name)
 
 
 def build_docx(
@@ -263,8 +399,35 @@ def build_docx(
     output_path: str | Path,
     *,
     title: str | None = None,
+    source_pdf: str | Path | None = None,
 ) -> Path:
+    """Build the translated docx.
+
+    If ``source_pdf`` is provided, page size + margins are sniffed from
+    the original PDF so the output mimics the textbook's visual rhythm.
+    Env vars (DOCX_PAGE_WIDTH_IN, DOCX_MARGIN_*_IN, etc.) override the
+    detected values. Background color is set via DOCX_PAGE_BACKGROUND.
+    """
     doc = Document()
+
+    # Auto-detect layout from the source PDF, then apply env-var overrides.
+    layout = None
+    if source_pdf:
+        from .page_layout import detect as detect_layout
+        try:
+            layout = detect_layout(source_pdf)
+        except Exception:
+            log.exception("page_layout detect failed (non-fatal)")
+    _apply_page_layout(doc, layout)
+
+    bg = _env_hex_color("DOCX_PAGE_BACKGROUND")
+    if bg:
+        try:
+            _apply_page_background(doc, bg)
+            log.info("page background color applied: #%s", bg)
+        except Exception:
+            log.exception("page background apply failed (non-fatal)")
+
     _configure_korean_fonts(doc)
     if title:
         doc.add_heading(title, level=0)
