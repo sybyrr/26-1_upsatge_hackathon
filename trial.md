@@ -8,25 +8,46 @@
 
 ## 1. 현재 적용 상태 (Python 주력 코드 기준)
 
-### ✅ 적용됨 (P0 + P1)
+기준 브랜치: `integrate-upstream` (사용자의 P1 작업 + upstream fork의 5개 commit 통합본).
+main에 머지 전 검증 완료 상태. 자세한 통합 내역은 commit history 참고.
 
-- 전체 파이프라인: parse → glossary → 요소별 번역 → DOCX 재조립
-- 사용자 선호 용어 입력 (`/translate` `preferred_terms` 폼) + 자동 glossary 사용자 우선 merge
-- 표/수식/그림 이미지 보존 (base64 + PDF crop, DOCX에 직접 임베드)
-- header/footer/page-number drop, OCR garbage 제거, 근접 duplicate 감지
-- `translation_meta` 수집 (카테고리·스킵 사유·이미지 보존·fallback·glossary·preferred 카운트)
-- summary JSON 출력 (`{job_id}_summary.json`)
+### ✅ 적용됨 (P0 + P1 + upstream)
+
+**P0 — 기본 파이프라인**
+- parse → glossary → 요소별 번역 → DOCX 재조립
+- 표/수식/그림 이미지 보존 (Document Parse base64 + PDF crop, DOCX 직접 임베드)
+- 이미지 자연 비율 유지 (픽셀→인치 환산, 강제 stretch 없음)
+- header/footer/page-number drop, OCR garbage 휴리스틱, 80-char fingerprint 중복 감지
+- LaTeX byte-perfect 보존 (`_protect_latex`/`_restore_latex`) — n8n에 없던 보강
+
+**P1 — 사용자 선호 용어 + 메타데이터**
+- `/translate`의 `preferred_terms` 폼 입력 + 자동 glossary 사용자 우선 merge
+- `Glossary.preferred_keys`로 사용자 지정 항목 추적 (2-Pass 검토 후도 보존)
+- `translation_meta` 수집: 카테고리·스킵 사유·이미지 보존·fallback·glossary·preferred 카운트
+- summary JSON 출력 (`{job_id}_summary.json`) — stages별 결과, 출력 경로, warnings 포함
 - 진행상황 UI + 선호 용어 textarea + 메타 그리드 + ★ 사용자 지정 마커
-- LaTeX byte-perfect 보존 (`_protect_latex`/`_restore_latex`) — n8n에는 없던 보강
+
+**upstream 통합으로 추가**
+- **2-Pass glossary review** — glossary 추출 후 `awaiting_review` 단계에서 일시정지, 사용자가 UI에서 용어 추가·수정·삭제한 뒤 번역 재개 (`/jobs/{id}/glossary` POST 엔드포인트). `interactive=false`로 우회 가능
+- **page-batched translation** — 같은 페이지의 paragraph/heading/list/caption을 `⟦Ek⟧` 마커로 묶어 ~3500자 단위 단일 호출 (Solar API 호출 10–30× 감소). 마커 누락 시 자동으로 per-element fallback
+- **boilerplate 자동 감지** — 3+ 페이지에서 반복되는 짧은 텍스트(러닝 헤더, copyright 등)를 `pipeline/boilerplate.py`가 사전 감지해 번역 대상에서 제외
+- **element-level parsed dumps** — `{job_id}_parsed.jsonl` (요소당 1줄, jq·grep용) + `{job_id}_parsed.md` (페이지 단위 사람 친화적 dump) 동시 생성
+- **메타 코멘트 차단 강화** — `_META_PATTERNS` 리스트가 한·영 변형 모두 잡음 (`[정확한 번역]`, `However, to strictly...`, `(※ ...)` 등)
 
 ### 📋 미적용 (P2 또는 별도 데모로 유지)
 
-- `layoutBlocks`/`textUnits`/`visualAssets` 명시적 분리 — 현재 `Element` 구조가 그 역할 동시 수행, Markdown/Notion exporter 도입 시 분리 예정
+- `layoutBlocks`/`textUnits`/`visualAssets` 명시적 분리 — 현재 `Element` 구조가 그 역할 동시 수행. Markdown/Notion exporter 도입 시점에 분리 예정
 - Cloudinary 업로드 — DOCX는 base64 직접 임베드라 불필요. Notion exporter 추가 시 필요
 - Notion 페이지 생성 — Python 측 미구현 (P2)
 - Markdown exporter — P2
-- Solar 번역 batch 분할 — Python은 `ThreadPoolExecutor` 요소별 병렬 호출로 같은 문제 회피
 - n8n workflow ↔ Python 통합 — 의도적 분리 ([AGENTS.md](AGENTS.md))
+
+### 🔜 다음에 할 일
+
+- `integrate-upstream` 브랜치를 main에 commit + merge (사용자 검토 후)
+- 실제 PDF로 LIVE 모드 회귀 테스트 (작은 영어 textbook PDF 1개)
+- 영상 시연 준비: n8n workflow.json의 `Webhook` 노드를 `Form Trigger`로 교체 (워크플로우 자체에서 UI 제공)
+- P2 우선순위 확정 후 Markdown exporter 작업 착수
 
 ### n8n workflow.json 자체
 
@@ -45,7 +66,7 @@
 
 ### 2.3 긴 문서는 응답 truncation에 주의
 
-13페이지 linear algebra PDF에서 Solar 응답 JSON이 중간에 잘렸음. n8n에서는 textUnits batch 분할로, Python에서는 요소별 병렬 호출로 단일 응답 크기를 작게 유지해 회피.
+13페이지 linear algebra PDF에서 Solar 응답 JSON이 중간에 잘렸음. n8n과 Python 모두 batch 분할로 회피한다 — Python에서는 같은 페이지 요소들을 `⟦Ek⟧` 마커로 묶어 ~3500자 단위로 보내고, 누락된 마커는 per-element로 재시도 (`_translate_page_chunk`).
 
 ## 3. 실패 사례 & 해결
 
