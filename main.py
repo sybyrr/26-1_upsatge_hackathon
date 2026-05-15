@@ -22,6 +22,7 @@ from pipeline.translator import build_translation_meta, translate_elements
 class GlossaryUpdate(BaseModel):
     glossary: dict[str, str]
 
+
 # Element categories where we capture an image crop from the original PDF
 # instead of trusting Document Parse's text/HTML extraction.
 CAPTURE_AS_IMAGE = {"table", "equation"}
@@ -296,7 +297,12 @@ def _run_pipeline(
         REGISTRY.set_stage(job_id, "docx", message="Word 문서 조립 중")
         out_docx = OUTPUT_DIR / f"{job_id}_translated.docx"
         try:
-            docx_builder.build_docx(translated, out_docx, title=title or work_path.stem)
+            docx_builder.build_docx(
+                translated,
+                out_docx,
+                title=title or work_path.stem,
+                source_pdf=work_path if work_path.suffix.lower() == ".pdf" and not mock_mode else None,
+            )
             log.info("job %s :: wrote %s", job_id, out_docx)
         except Exception as e:
             warnings.append(f"docx_build_failed: {type(e).__name__}: {e}")
