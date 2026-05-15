@@ -1,11 +1,27 @@
 """Element-aware translation with structure preservation.
 
-원칙:
-- 일반 텍스트 → 자연스러운 한국어
-- 수식(equation) → LaTeX 그대로 유지 (텍스트 주변 설명만 번역 — 여기선 통째 보존)
-- 표(table) → HTML 태그/속성/구조는 그대로, 내부 텍스트만 번역
-- 그림(figure)/차트(chart) → 캡션 텍스트가 있으면 번역, 이미지 자체는 보존
-- 용어집을 system 프롬프트에 박아 일관된 용어 사용
+라우팅 (현재 동작):
+- paragraph/heading/list/caption → Solar 번역 (LaTeX placeholder 보호, context 전달)
+- header → 페이지 번호면 drop, 챕터 헤더면 작은 italic 번역
+- table → main.py에서 PDF 영역 크롭한 base64가 붙어 있으면 이미지로 통과 (번역 X).
+  base64 없을 때만 HTML 트리 walk로 셀 텍스트 번역 (fallback).
+- equation → main.py에서 PDF 크롭 base64가 붙어 있으면 이미지로 통과.
+  없을 때만 docx_builder에서 LaTeX → MathML → OMML로 렌더 (fallback).
+- figure/chart → 항상 PASSTHROUGH. Upstage Document Parse base64 그대로.
+- header(페이지번호)/footer/footnote → SKIP.
+
+번역 보호 장치:
+1. _wrap_unicode_math: U+1D400-U+1D7FF 영역 unicode bold-italic 글자를 \\mathbf{} LaTeX로 변환.
+2. _protect_latex: \\$..\\$, \\(..\\), \\[..\\] 패턴을 ⟦M0⟧ placeholder로 치환해 모델이 못 만짐.
+3. _looks_like_ocr_garbage: 파이프·문자 밀도 휴리스틱으로 깨진 행렬 잔해 element 자동 폐기.
+4. _detect_near_duplicates: 80-char fingerprint로 Document Parse가 같은 단락 두 번 뱉은 케이스 dedup.
+5. _clean_model_output: '**번역:**', '[정확한 번역]', 'However, to strictly...' 등 메타 코멘트
+   첫 매치 위치에서 truncation. 남은 **bold** 마커도 strip.
+6. Glossary: chapter 전체에서 추출한 용어집을 system prompt에 강제 주입.
+
+호출 패턴:
+- _translate_one은 ThreadPoolExecutor 워커당 1번 실행.
+- TRANSLATE_WORKERS 환경변수로 동시 처리 개수 조정.
 """
 from __future__ import annotations
 
