@@ -59,14 +59,44 @@ class Glossary:
         )
 
     def apply(self, text: str) -> str:
-        """Optional post-process: enforce glossary terms after model output."""
-        if not self.mapping:
+        """Optional post-process: enforce glossary terms after model output.
+
+        Only applies when the text is already a real Korean translation —
+        otherwise this regex would weld Korean glossary terms into the middle
+        of an untranslated English sentence (producing 'Figure 4.1: 행 그림 :
+        The point... is the 해.'), which is worse than leaving the English
+        prose untouched for the next pipeline stage to catch.
+        """
+        if not self.mapping or not text:
+            return text
+        if not _looks_translated(text):
             return text
         out = text
         for en, ko in self.mapping.items():
             pattern = re.compile(rf"\b{re.escape(en)}\b", flags=re.IGNORECASE)
             out = pattern.sub(ko, out)
         return out
+
+
+def _looks_translated(text: str) -> bool:
+    """True unless the text is dominantly English prose.
+
+    The goal is to block glossary application on responses that the model
+    failed to translate (long English sentences with no/few Korean chars),
+    while still letting partial translations through. A heuristic:
+
+      - if there are very few English letters total (<30), apply (short
+        fragments are too noisy to judge);
+      - otherwise require at least one Korean char per two English letters.
+
+    Pure LaTeX / math (no English prose) returns True so it doesn't block
+    glossary use on math-only elements.
+    """
+    en = sum(1 for c in text if c.isascii() and c.isalpha())
+    ko = sum(1 for c in text if "가" <= c <= "힣")
+    if en < 30:
+        return True
+    return ko * 2 >= en
 
 
 def _chunk(text: str, size: int = 6000) -> list[str]:

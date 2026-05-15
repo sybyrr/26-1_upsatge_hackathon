@@ -65,11 +65,17 @@ GROUP_MAX_CHARS = 3500
 # guessing which regime applies.
 
 _COMMON_PRESERVE = (
-    "Preserve LaTeX ($...$, $$...$$, \\(...\\), \\[...\\]), MathML, placeholders "
-    "like ⟦M0⟧, inline code, identifiers, numbers, units, and equation references "
-    "EXACTLY — byte for byte.\n"
-    "Do NOT translate variable names, matrix entries, symbolic expressions, or "
-    "formula structure. Treat them as preserve-only tokens.\n"
+    "Preserve EXACTLY (byte-for-byte) ONLY these tokens, nothing else:\n"
+    "  - LaTeX expressions ($...$, $$...$$, \\(...\\), \\[...\\])\n"
+    "  - MathML and placeholders like ⟦M0⟧\n"
+    "  - Inline code spans, identifiers, variable names, matrix entries\n"
+    "  - Numbers, units, equation references (Eq. 4.1, Fig. 2.3)\n"
+    "  - Proper-noun acronyms / citations (MIT, NASA, IEEE)\n"
+    "EVERY OTHER English word — including ordinary nouns, verbs, adjectives, "
+    "captions, table-cell prose, figure labels (Figure X:, Table Y:) — MUST "
+    "be translated into Korean. Do NOT leave English natural-language prose "
+    "untranslated. 'Row picture' becomes '행 그림', 'projects onto' becomes "
+    "'~에 정사영한다', etc. If you are unsure, translate; do not preserve.\n"
 )
 _COMMON_FRAGMENT = (
     "If the source is a fragment (heading, caption, list item, table cell, short "
