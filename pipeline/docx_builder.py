@@ -105,7 +105,10 @@ def _add_image_from_base64(
             if mode not in ("RGB", "RGBA", "L"):
                 im = im.convert("RGB")
             normalized = BytesIO()
-            im.save(normalized, format="PNG")
+            # compress_level=1 (default is 6): ~2-3x faster PNG encoding at the
+            # cost of ~30% larger embedded image bytes. The docx file size grows
+            # somewhat but build time drops noticeably on image-heavy documents.
+            im.save(normalized, format="PNG", compress_level=1)
             normalized.seek(0)
         bio = normalized
     except Exception as e:
