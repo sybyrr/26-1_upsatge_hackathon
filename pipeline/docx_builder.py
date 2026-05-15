@@ -521,11 +521,37 @@ def _try_docx2pdf(docx_path: Path, pdf_path: Path) -> bool:
         from docx2pdf import convert
     except ImportError:
         return False
+
+    # docx2pdf calls Word via COM on Windows. COM is per-thread, so when the
+    # pipeline runs on a background worker thread (which is our case — see
+    # _run_pipeline in main.py), the thread must call CoInitialize() before
+    # any Dispatch happens. FastAPI's main thread initializes COM
+    # automatically; spawned threads do not. macOS uses AppleScript and does
+    # not need this.
+    com_initialized = False
+    try:
+        import pythoncom
+        try:
+            pythoncom.CoInitialize()
+            com_initialized = True
+        except Exception:
+            log.exception("CoInitialize failed (non-fatal); attempting convert anyway")
+    except ImportError:
+        pass
+
     try:
         convert(str(docx_path), str(pdf_path))
     except Exception:
         log.exception("docx2pdf conversion failed")
         return False
+    finally:
+        if com_initialized:
+            try:
+                import pythoncom
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
+
     return pdf_path.exists()
 
 
