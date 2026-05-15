@@ -270,10 +270,26 @@ def build_docx(
             continue
 
         if cat == "equation":
+            # Equations are image-only: a base64 attached above already rendered,
+            # otherwise insert a clear placeholder with the raw LaTeX so the
+            # missing equation is visible and recoverable. We deliberately do NOT
+            # fall back to OMML — the MathML→OMML pipeline produces visually
+            # broken output for many real-world equations (mixed fonts, missing
+            # glyphs), and inconsistent quality across equations is worse than
+            # a uniformly-flagged failure.
             latex = (elem.text or elem.markdown or "").strip()
             if not latex:
                 latex = _extract_latex_from_html(elem.html)
-            _add_equation_paragraph(doc, latex)
+            p = doc.add_paragraph()
+            run = p.add_run(
+                f"[수식 캡처 실패 — 원본 PDF p.{elem.page} 참조] {latex}".rstrip()
+            )
+            run.italic = True
+            run.font.size = Pt(10)
+            log.warning(
+                "equation: no base64 image — placeholder inserted (id=%s p=%s coords=%s)",
+                elem.id, elem.page, "yes" if elem.coordinates else "no",
+            )
             continue
 
         if cat in HEADING_LEVELS:

@@ -1,0 +1,134 @@
+{
+  "job_id": "8997329458e1",
+  "input_filename": "8997329458e1_8ap.pdf",
+  "title": "8997329458e1_8ap",
+  "mock_mode": false,
+  "stages": {
+    "parse": {
+      "element_count": 105
+    },
+    "glossary": {
+      "total_terms": 8,
+      "preferred_terms_applied": 0,
+      "interactive_review": true
+    },
+    "translate": {
+      "total_elements": 105,
+      "translation_target": 70,
+      "translated": 48,
+      "skipped": 1,
+      "skip_reasons": {
+        "header_footer_page_number": 1,
+        "duplicate": 0,
+        "ocr_garbage": 0,
+        "boilerplate": 0,
+        "passthrough_equation": 0,
+        "passthrough_figure": 0,
+        "passthrough_chart": 0
+      },
+      "image_preserved": {
+        "table": 0,
+        "equation": 33,
+        "figure": 0,
+        "chart": 1
+      },
+      "image_preserved_total": 34,
+      "fallback": 22,
+      "kept_original_after_failure": 22,
+      "glossary_size": 8,
+      "preferred_terms_applied": 0,
+      "category_counts": {
+        "header": 2,
+        "paragraph": 46,
+        "equation": 33,
+        "caption": 22,
+        "footer": 1,
+        "chart": 1
+      },
+      "status_counts": {
+        "translated:header": 2,
+        "translated": 46,
+        "image:equation": 33,
+        "fallback:translate_failed": 22,
+        "skip:footer": 1,
+        "image:chart": 1
+      }
+    },
+    "docx": {
+      "output": "output/8997329458e1_translated.docx"
+    },
+    "pdf": {
+      "output": "output/8997329458e1_translated.pdf"
+    }
+  },
+  "category_counts": {
+    "header": 2,
+    "paragraph": 46,
+    "equation": 33,
+    "caption": 22,
+    "footer": 1,
+    "chart": 1
+  },
+  "translation_meta": {
+    "total_elements": 105,
+    "translation_target": 70,
+    "translated": 48,
+    "skipped": 1,
+    "skip_reasons": {
+      "header_footer_page_number": 1,
+      "duplicate": 0,
+      "ocr_garbage": 0,
+      "boilerplate": 0,
+      "passthrough_equation": 0,
+      "passthrough_figure": 0,
+      "passthrough_chart": 0
+    },
+    "image_preserved": {
+      "table": 0,
+      "equation": 33,
+      "figure": 0,
+      "chart": 1
+    },
+    "image_preserved_total": 34,
+    "fallback": 22,
+    "kept_original_after_failure": 22,
+    "glossary_size": 8,
+    "preferred_terms_applied": 0,
+    "category_counts": {
+      "header": 2,
+      "paragraph": 46,
+      "equation": 33,
+      "caption": 22,
+      "footer": 1,
+      "chart": 1
+    },
+    "status_counts": {
+      "translated:header": 2,
+      "translated": 46,
+      "image:equation": 33,
+      "fallback:translate_failed": 22,
+      "skip:footer": 1,
+      "image:chart": 1
+    }
+  },
+  "glossary": {
+    "Continuum Solutions": "연속체 해",
+    "Pr(z)": "Pr(z)",
+    "Pl+1(z)": "Pl+1(z)",
+    "kr": "kr",
+    "ikr": "ikr",
+    "j1(kr)": "j1(kr)",
+    "PL(cos)": "PL(cos)",
+    "collision theory": "충돌 이론"
+  },
+  "preferred_terms": [],
+  "outputs": {
+    "docx": "output/8997329458e1_translated.docx",
+    "pdf": "output/8997329458e1_translated.pdf",
+    "raw_debug": "output/8997329458e1_raw.json",
+    "parsed_jsonl": "output/8997329458e1_parsed.jsonl",
+    "parsed_md": "output/8997329458e1_parsed.md",
+    "summary": "output/8997329458e1_summary.json"
+  },
+  "warnings": []
+}

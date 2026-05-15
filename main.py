@@ -91,21 +91,49 @@ def _run_pipeline(
         if not mock_mode and work_path.suffix.lower() == ".pdf":
             try:
                 cropped = 0
+                no_coords: list[tuple[int, int, str]] = []  # (id, page, category)
+                crop_failed: list[tuple[int, int, str]] = []
                 with PdfCropper(work_path) as cropper:
                     for elem in parsed.elements:
-                        if elem.category.lower() not in CAPTURE_AS_IMAGE:
+                        cat = elem.category.lower()
+                        if cat not in CAPTURE_AS_IMAGE:
                             continue
                         if elem.base64:
                             continue
                         if not elem.coordinates:
+                            no_coords.append((elem.id, elem.page, cat))
                             continue
                         b64 = cropper.crop_to_base64(elem.page, elem.coordinates)
                         if b64:
                             elem.base64 = b64
                             cropped += 1
+                        else:
+                            crop_failed.append((elem.id, elem.page, cat))
                 log.info("job %s :: cropped %d table/equation regions from PDF", job_id, cropped)
+                # Surface elements that couldn't be image-captured so the user
+                # can find them in the docx (each will show a [수식 캡처 실패]
+                # placeholder in place).
+                if no_coords:
+                    log.warning(
+                        "job %s :: %d elements skipped crop (no coordinates): %s",
+                        job_id, len(no_coords), no_coords[:8],
+                    )
+                    warnings.append(
+                        f"crop_no_coords: {len(no_coords)} elements lack bbox "
+                        f"(see parsed.jsonl for ids)"
+                    )
+                if crop_failed:
+                    log.warning(
+                        "job %s :: %d elements crop returned None: %s",
+                        job_id, len(crop_failed), crop_failed[:8],
+                    )
+                    warnings.append(
+                        f"crop_failed: {len(crop_failed)} elements (degenerate "
+                        f"bbox or pixmap error)"
+                    )
             except Exception:
                 log.exception("job %s :: PDF cropping failed (non-fatal); falling back to text", job_id)
+                warnings.append("pdf_crop_module_failed: all equations/tables will render as placeholders")
 
         # Dump raw response for debugging — category counts + first raw element of each
         # category with long string fields truncated. This is the file to share when
